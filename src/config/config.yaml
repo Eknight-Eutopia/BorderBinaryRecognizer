@@ -1,0 +1,6 @@
+main:
+  log_level: "info"
+  max_threads: 10
+
+idat:
+  path: "/home/eutopia/Tools/REVERSE/ida_pro_91/"
