@@ -87,7 +87,7 @@ def find_socket_domains():
     with open(ouput_path, "w") as f:
         json.dump(
             [
-                {"ea": ea, "val": val, "name": name} for ea, val, name in results
+                {"ea": hex(ea), "val": val, "name": name} for ea, val, name in results
             ],
             f,
             indent=4

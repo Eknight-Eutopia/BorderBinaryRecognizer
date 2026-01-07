@@ -31,6 +31,7 @@ class BorderBinaryRecognizor:
     tmp_file = os.path.abspath("./tmp/")
     exclude_libraries = [
         "libc.so.6",
+        "libcrypto.so.1.1"
     ]
     lock = threading.Lock()
 
@@ -155,7 +156,7 @@ class BorderBinaryRecognizor:
         return elf.is_border
 
     def recognize_socket_features(self):
-        """check if there is any socket(AF_INET/AF_INET6) -> bind -> listen -> accept logic"""
+        """check if there is any socket(AF_INET/AF_INET6) -> bind(sockaddr) -> listen -> accept logic"""
         tmp_exe_ctr = 0
         tmp_lib_ctr = 0
 
