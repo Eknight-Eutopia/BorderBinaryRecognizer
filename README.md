@@ -12,3 +12,4 @@ load all elf binaries (executables), get all binaries' libraries
 1. add multi-thread supported to phrase2-4.
 2. maybe we can leverage database to store analysis results.
 3. maybe have other more precise check algorithm.
+  - cross function

@@ -35,6 +35,77 @@ def get_var(expr):
         var = expr.obj_ea
     return var
 
+class MemWrite:
+    def __init__(self, base, offset, value):
+        self.base = base        # cot_var / cot_obj
+        self.offset = offset    # int
+        self.value = value      # cexpr_t
+
+def peel_to_base_offset(expr):
+    offset = 0
+    cur = expr
+    print(f"[*] cur op: {ida_hexrays.get_ctype_name(cur.op)}")
+    while True:
+        # *(...)
+        if cur.op == ida_hexrays.cot_ptr:
+            cur = cur.x
+            continue
+
+        # (type)expr
+        if cur.op == ida_hexrays.cot_cast:
+            cur = cur.x
+            continue
+
+        # &expr
+        if cur.op == ida_hexrays.cot_ref:
+            cur = cur.x
+            continue
+
+        # base + off
+        if cur.op == ida_hexrays.cot_add:
+            if cur.y.op == ida_hexrays.cot_num:
+                offset += cur.y.numval()
+                cur = cur.x
+                continue
+            return None
+
+        # array index
+        if cur.op == ida_hexrays.cot_idx:
+            if cur.y.op != ida_hexrays.cot_num:
+                return None
+
+            idx = cur.y.numval()
+            t = cur.x.type
+
+            if t.is_array() and t.get_array_element().get_size() == 1:
+                offset += idx
+            else:
+                elem_size = t.get_array_element().get_size()
+                offset += idx * elem_size
+            cur = cur.x
+            continue
+
+        # struct field / memory reference
+        if cur.op == ida_hexrays.cot_memref:
+            # memref.x 是 base，memref.m 是成员偏移
+            offset += cur.m
+            cur = cur.x
+            continue
+
+        break
+    print(f"[*] cur.op: {ida_hexrays.get_ctype_name(cur.op)}, offset: {offset}")
+    return cur, offset
+
+def as_mem_write(asg):
+    lhs, rhs = asg.x, asg.y
+    bo = peel_to_base_offset(lhs)
+    if not bo:
+        return None
+
+    base, offset = bo
+    return MemWrite(base=base, offset=offset, value=rhs)
+
+
 class BindVisitor(ida_hexrays.ctree_visitor_t):
     def __init__(self, cfunc):
         super().__init__(ida_hexrays.CV_FAST)
@@ -96,59 +167,40 @@ class BindVisitor(ida_hexrays.ctree_visitor_t):
         ip = None
         port = None
         family = None
+        sockaddr = None
         for asg in self.assignments:
-            lhs = asg.x
-            rhs = asg.y
-            print(f"lhs: {lhs}, lhs.op: {lhs.op}, rhs: {rhs}")
-            if lhs.op == ida_hexrays.cot_var or lhs.op == ida_hexrays.cot_obj:
-                base = lhs
-                base_var = get_var(base)
-                print(f"[*] base.v: {base_var}")
-                if base.v != var:
-                    continue
-                if rhs.op == ida_hexrays.cot_num:
-                    print(f"[*] rhs.num: {rhs.numval()}")
-                    port = socket.htons(rhs.numval() // 0x10000)
-                    ip = "0.0.0.0"
-            # *(var + offset) = value
-            elif lhs.op == ida_hexrays.cot_ptr:
-                add = lhs.x
-                base = None
-                off = None
-                # skip op cast
-                while add.op == ida_hexrays.cot_cast:
-                    add = add.x
+            print(f"[*] addr: {hex(asg.ea)}")
+            mw = as_mem_write(asg)
+            if not mw:
+                continue
 
-                if add.op == ida_hexrays.cot_add:
-                    base, off = add.x, add.y
-                elif add.op == ida_hexrays.cot_ref:
-                    assert add.x.op == ida_hexrays.cot_idx
-                    base, off = add.x.x, add.x.y
-                else:
-                    continue
+            base, offset, rhs = mw.base, mw.offset, mw.value
+            print(f"[*] base.op, base.v: {ida_hexrays.get_ctype_name(base.op)}, {base.v}")
+            if get_var(base) != var:
+                continue
+            print(f"[*] rhs.op: {ida_hexrays.get_ctype_name(rhs.op)}")
+            if rhs.op != ida_hexrays.cot_num:
+                continue
 
-                # recursive retrieve base val
-                if base.op == ida_hexrays.cot_memref:
-                    assert base.x.op == ida_hexrays.cot_idx
-                    base = base.x.x
+            val = rhs.numval()
+            if offset == 0:
+                family = rev16(val & 0xffff)
+                print(f"[*] family: {family}")
+                if val & 0xffff0000 != 0:
+                    port = rev16(val // 0x10000)
+                    print(f"[*] port derived from family: {port}")
 
-                if (base.op != ida_hexrays.cot_var and base.op != ida_hexrays.cot_obj) or base.v != var:
-                    continue
+            if offset == 2:
+                port = rev16(val)
+                print(f"[*] port: {port}")
 
-                if off.op != ida_hexrays.cot_num:
-                    continue
-
-                offset = off.numval()
-
-                if rhs.op == ida_hexrays.cot_num:
-                    if offset == 0:
-                        port = rev16(rhs.numval())
-                    elif offset == 2:
-                        ip = dword_to_ip(rhs.numval())
+            elif offset == 4:
+                ip = dword_to_ip(val)
+                print(f"[*] ip: {ip}")
 
 
-        print(f"    IP   : {ip}")
-        print(f"    Port : {port}")
+        print(f"[+] IP   : {ip}")
+        print(f"[+] Port : {port}")
         self.results.append((ip, port))
 
 # ---------------------------------------------------------
